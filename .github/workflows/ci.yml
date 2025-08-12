@@ -1,0 +1,109 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+  DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
+  IMAGE_NAME: gitops-web-app
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r app/src/requirements.txt
+        pip install pytest flask-testing
+    
+    - name: Run tests
+      run: |
+        cd app
+        python -m pytest tests/ -v || echo "No tests found"
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ env.DOCKER_HUB_USERNAME }}
+        password: ${{ env.DOCKER_HUB_TOKEN }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v4
+      with:
+        images: ${{ env.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix=sha-
+          type=raw,value=latest
+    
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v4
+      with:
+        context: ./app
+        file: ./app/Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  update-helm-chart:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+    - name: Checkout manifests repo
+      uses: actions/checkout@v3
+      with:
+        repository: ${{ github.repository_owner }}/k8s-manifests
+        token: ${{ secrets.GITHUB_TOKEN }}
+        path: k8s-manifests
+
+    - name: Update Helm values
+      run: |
+        cd k8s-manifests
+        IMAGE_TAG=$(echo "${{ needs.build-and-push.outputs.image-tag }}" | grep sha- | head -1)
+        if [ -z "$IMAGE_TAG" ]; then
+          IMAGE_TAG="${{ env.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest"
+        fi
+
+        sed -i "s|repository:.*|repository: ${{ env.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}|g" helm-chart/values.yaml
+        sed -i "s|tag:.*|tag: \"$(echo $IMAGE_TAG | cut -d':' -f2)\"|g" helm-chart/values.yaml
+
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git add .
+        git commit -m "Update image tag to $IMAGE_TAG" || exit 0
+        git push

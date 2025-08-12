@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-6">
+        <h2>Add New Item</h2>
+        <form method="POST" action="/add" class="mb-4">
+            <div class="mb-3">
+                <label for="name" class="form-label">Item Name</label>
+                <input type="text" class="form-control" id="name" name="name" required>
+            </div>
+            <div class="mb-3">
+                <label for="description" class="form-label">Description</label>
+                <textarea class="form-control" id="description" name="description" rows="3"></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">Add Item</button>
+        </form>
+    </div>
+    
+    <div class="col-md-6">
+        <h2>Items List</h2>
+        {% if items %}
+            <div class="list-group">
+                {% for item in items %}
+                <div class="list-group-item">
+                    <h5 class="mb-1">{{ item.name }}</h5>
+                    <p class="mb-1">{{ item.description or 'No description' }}</p>
+                    <small>Added: {{ item.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</small>
+                </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p class="text-muted">No items found. Add your first item!</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
